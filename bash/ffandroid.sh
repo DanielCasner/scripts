@@ -1,0 +1,1 @@
+ffmpeg -i $1 -s qvga -vcodec libx264 -b 300k -ac 1 -ar 22050 $2

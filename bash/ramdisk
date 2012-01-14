@@ -1,0 +1,13 @@
+#!/bin/bash
+
+# Setup the ramdisk
+mke2fs -q -m 0 /dev/ram0
+mount /dev/ram0 /var/ramdisk
+
+# Create folders
+mkdir /var/ramdisk/camserver
+
+# Set permissions after creating folders
+chown -R root:users /var/ramdisk
+chmod -R 0777 /var/ramdisk
+
