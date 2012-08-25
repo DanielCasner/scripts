@@ -29,7 +29,7 @@ import sys, os, time, subprocess, getopt
 USAGE = """
 %s [options] <input file or directory> <output directory>
 
-Transcodes 1 file or a whole directory.
+Transcodes a single file, all files in a directory or an M3U file.
 
 Options:
     -b --bitrate= Set the output bitrate. Default 128kbps
@@ -78,6 +78,18 @@ def outPathName(in_path_name, out_path, out_type):
     base, ext = os.path.splitext(name)
     return os.path.join(out_path, base+out_type)
 
+def transcodeList(toXcode, inpath, outpath, bitrate, mono, outtype):
+    "Transcode all files in a list"
+    cores = coreCount()
+    procs = []
+    while toXcode or procs:
+        procs = [p for p in procs if not p.complete]
+        while toXcode and len(procs) < cores:
+            ipn = toXcode.pop(0)
+            sys.stdout.write('Commencing transcode of "%s"\n' %ipn)
+            procs.append(Transcode(ipn, outPathName(ipn, outpath, outtype), bitrate, mono))
+        time.sleep(0.1)
+
 if __name__ == '__main__':
     try:
         opts, args = getopt.getopt(sys.argv[1:], "b:mt:h", ('bitrate=', 'mono', 'type=', 'help'))
@@ -90,7 +102,6 @@ if __name__ == '__main__':
             sys.exit(1)
         else:
             inpath, outpath = args
-            cores = coreCount()
             bitrate = '128k'
             mono = False
             outtype = '.mp3'
@@ -106,9 +117,23 @@ if __name__ == '__main__':
                     outtype = val
                     if not outtype.startswith('.'): outtype = '.' + outtype
             if os.path.isfile(inpath):
-                p = Transcode(inpath, outPathName(inpath, outpath, outtype), bitrate, mono)
-                while not p.complete: time.sleep(0.1)
-                sys.exit(p.poll())
+                if inpath.endswith('.mp3'):
+                    p = Transcode(inpath, outPathName(inpath, outpath, outtype), bitrate, mono)
+                    while not p.complete: time.sleep(0.1)
+                    sys.exit(p.poll())
+                elif inpath.endswith('.m3u'):
+                    sys.stdout.write('Reading playlist file...')
+                    toXcode = []
+                    try:
+                        plst = file(inpath, 'r').read()
+                        for l in plst.split('\r'):
+                            if os.path.isfile(l):
+                                toXcode.append(l)
+                    except:
+                        sys.stderr.write('Error reading playlist file.\n')
+                    else:
+                        sys.stdout.write('Found %d files to transcode\n' % len(toXcode))
+                        transcodeList(toXcode, inpath, outpath, bitrate, mono, outtype)
             else:
                 toXcode = []
                 def append_appropriate(l, dirname, fnames):
@@ -116,12 +141,5 @@ if __name__ == '__main__':
                 sys.stdout.write('Finding files to transcode...')
                 os.path.walk(inpath, append_appropriate, toXcode)
                 sys.stdout.write('%d found.\n' % len(toXcode))
-                procs = []
-                while toXcode or procs:
-                    procs = [p for p in procs if not p.complete]
-                    while toXcode and len(procs) < cores:
-                        ipn = toXcode.pop(0)
-                        sys.stdout.write('Commencing transcode of "%s"\n' %ipn)
-                        procs.append(Transcode(ipn, outPathName(ipn, outpath, outtype), bitrate, mono))
-                    time.sleep(0.1)
+                transcodeList(toXcode, inpath, outpath, bitrate, mono, outtype)
                         
