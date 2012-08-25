@@ -137,7 +137,7 @@ if __name__ == '__main__':
             else:
                 toXcode = []
                 def append_appropriate(l, dirname, fnames):
-                    l.extend([os.path.join(dirname, f) for f in fnames if f.endswith('.mp3')])
+                    l.extend([os.path.join(dirname, f) for f in fnames if f.endswith('.mp3') or f.endswith('.ogg') or f.endswith('.wav') or f.endswith('.flac')])
                 sys.stdout.write('Finding files to transcode...')
                 os.path.walk(inpath, append_appropriate, toXcode)
                 sys.stdout.write('%d found.\n' % len(toXcode))
