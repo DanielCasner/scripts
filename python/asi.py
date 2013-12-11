@@ -151,11 +151,13 @@ def main(argv):
                 for d in dirs:
                     if os.path.normpath(d) == meta['out dir'] or d == '.svn': dirs.remove(d)
                 for name in fnames:
+                    if path.startswith('./'): path = path[2:]
                     if getFileTime(os.path.join(path,name)) > meta['last time']:                        
                         if extExp.match(name):
                             it = procFile(name, path, meta)
                             # Upload if requested
                             if meta['hostname']:
+                                
                                 upload(meta['FTP'], os.path.join(meta['remote dir'], path).replace(os.path.sep, '/'), it)
                         elif os.path.isfile(os.path.join(path, name)) and meta['all'] and meta['hostname'] and name != TIME_STAMP_FILE and not name.endswith('~'):
                             upload(meta['FTP'], os.path.join(meta['remote dir'], path).replace(os.path.sep, '/'), os.path.join(path, name))
@@ -247,14 +249,22 @@ def upload(FTP, remotePath, filePathname):
     def ccd(path):
         try: FTP.cwd(path)
         except ftplib.error_perm, e:
+            sys.stdout.write('Couldn\'t CD to "%s," adjusting directory name.\n' % path)
             d = path.split('/')
+            if d[0] == '':
+                d[0] = '/' + d[1]
             try: FTP.cwd(d[0])
-            except: FTP.cwd(FTP.mkd(d[0]))
+            except:
+                sys.stdout.write('Creating remote directory "%s"\n' % d[0])
+                FTP.cwd(FTP.mkd(d[0]))
             if len(d) > 1:
                 ccd('/'.join(d[1:]))
     ccd(remotePath)
     fh = open(filePathname, 'rb')
-    FTP.storbinary('STOR %s' % os.path.basename(filePathname), fh)
+    try:
+        FTP.storbinary('STOR %s' % os.path.basename(filePathname), fh)
+    except Exception, e:
+        sys.stderr.write('Error uploading file "%s":\n\t%s\n' % (filePathname, e)) 
     fh.close()
     
 
