@@ -53,14 +53,44 @@ def vdiv(top, bottom, voltage=1.0):
     return V(i, bottom)
 
 if __name__ == '__main__':
-    from sys import argv
-    from os.path import split as pathSplit
-    prompt = pathSplit(argv[0])[1] + ' >>> '
-    while True:
+    import sys
+    print sys.argv
+    v=None
+    i=None
+    r=None
+    for a in sys.argv[1:]:
         try:
-            print input(prompt)
-        except EOFError:
-            break
-        except KeyboardInterrupt:
-            break
-    print '\n'
+            arg, val = a.split('=')
+        except ValueError:
+            continue
+        arg = arg.lower()
+        if arg == 'v':
+            try:
+                v = float(val)
+            except ValueError:
+                sys.stderr.write('Can\'t parse "%s" as a value for voltage.' % val)
+                sys.exit(1)
+        elif arg == 'i':
+            try:
+                i = float(val)
+            except ValueError:
+                sys.stderr.write('Can\'t parse "%s" as a value for current.' % val)
+                sys.exit(1)
+        elif arg == 'r':
+            try:
+                r = float(val)
+            except ValueError:
+                sys.stderr.write('Can\'t parse "%s" as a value for resistance.' % val)
+                sys.exit(1)
+        else:
+            sys.stderr.write('Unexpected argument: "%s=%s"' % (arg, val))
+    if v is not None and i is not None:
+        sys.stdout.write('R=%f\n' % R(i, v))
+        sys.stdout.write('W=%f\n' % W(v, i))
+        sys.stdout.write('P=%f\n' % P(i=i, v=v))
+    if v is not None and r is not None:
+        sys.stdout.write('I=%f\n' % I(v, r))
+        sys.stdout.write('P=%f\n' % P(v=v, r=r))
+    if i is not None and r is not None:
+        sys.stdout.write('V=%f\n' % V(i, r))
+        sys.stdout.write('P=%f\n' % P(i=i, r=r))
