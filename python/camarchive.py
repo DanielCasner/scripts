@@ -1,11 +1,23 @@
 #!/usr/bin/env python3
 """
-A script to pull in individual JPEG images from security cameras (over SCP), add subtitle date time information and
-then encode the images into video files using FFMPEG. Finally, the original images are deleted.
+A script to pull in individual JPEG images from security cameras (over SCP or locally), add
+subtitle date time information and then encode the images into video files using FFMPEG.
+Finally, the original images are deleted.
 """
+__author__ = "Daniel Casner <daniel@danielcasner.org>"
+__version__ = "0.2.0"
 
-import sys, os, subprocess, re, time, threading
-from PIL import Image, ImageDraw, ImageFont
+import sys
+import os
+import subprocess
+import re
+import time
+from multiprocessing import Pool, cpu_count
+
+try:
+    from PIL import Image, ImageDraw, ImageFont
+except ImportError:
+    sys.exit("No module PIL found, try pip3 install pillow")
 
 USAGE = """
 %s <SCP TARGETS>
@@ -17,32 +29,51 @@ SCP TARGETS may be one or multiple scp targets, each one will be spawned in a th
 
 V = 1
 
-class CamArchiver(threading.Thread):
+DATE_TIME_RE = re.compile(r"[0-9A-F]+\(.+\)_.+_(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2}).+\.jpg")
+IMG_FMT = "img%08d.bmp" # Worst case at 1 frame per 2 seconds for 24 hours
+
+if os.path.isfile("/usr/share/fonts/truetype/droid/DroidSans.ttf"):
+    FONT = ImageFont.truetype("/usr/share/fonts/truetype/droid/DroidSans.ttf", 22)
+elif os.path.isfile("/Library/Fonts/Andale Mono.ttf"):
+    FONT = ImageFont.truetype("/Library/Fonts/Andale Mono.ttf", 22)
+else:
+    raise sys.exit("No supported font found")
+
+def generate_out_name(in_file_name, enumeration):
+    "Generates an enumerated file name from the incoming file name and enumeration value"
+    path, _ = os.path.split(in_file_name)
+    return os.path.join(path, IMG_FMT % enumeration)
+
+def annotate_image(self, args):
+    "Adds date / time text to an image"
+    enumeration, (in_file_name, annotate_time) = args
+    out_file_name = generate_out_name(in_file_name, enumeration)
+    if os.path.isfile(out_file_name):
+        # Skip files which have already been generated
+        return out_file_name
+    try:
+        img = Image.open(in_file_name)
+        draw = ImageDraw.Draw(img)
+        draw.text((0, 0), "{0:04d}-{1:02d}-{2:02d} {3:02d}:{4:02d}:{5:02d}".format(*annotate_time),
+                  (255, 128, 0), font=self.FONT)
+        img.save(out_file_name)
+    except Exception as exp:
+        sys.stderr.write("Failed to annotate image \"{}\":{linesep}{}{linesep}".format(
+            in_file_name, exp, linesep=os.linesep
+        ))
+        return None
+    else:
+        return out_file_name
+
+class CamArchiver(object):
     "A class to manage the lifecycle of camera image archiving."
 
-    DATE_TIME_RE = re.compile(r"[0-9A-F]+\(.+\)_.+_(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2}).+\.jpg")
-    IMG_FMT = "img%08d.bmp" # Worst case at 1 frame per 2 seconds for 24 hours
-
-    def __init__(self, target):
+    def __init__(self, target, pool):
         "Sets up the archiving class and process"
-        threading.Thread.__init__(self)
-        if os.path.isfile("/usr/share/fonts/truetype/droid/DroidSans.ttf"):
-            self.FONT = ImageFont.truetype("/usr/share/fonts/truetype/droid/DroidSans.ttf",22)
-        elif os.path.isfile("/Library/Fonts/Andale Mono.ttf"):
-            self.FONT = ImageFont.truetype("/Library/Fonts/Andale Mono.ttf",22)
-        else:
-            raise Exception("No supported font found")
-        if ':' in target:
-            self.scpTarget = target
-            self.localTarget = None
-        else:
-            self.scpTarget = None
-            self.localTarget = target
-        if not scpTarget.endswith('/'): self.scpTarget += '/'
-        self.dir = os.path.split(scpTarget)[1]
-        self.tempDir = os.path.join(self.dir, "temp")
+        self.dir = target
+        self.pool = pool
         self.subprocess = None
-        self.remoteRmFiles = []
+        self.rm_files = []
 
     def __del__(self):
         "Cleanup everything we've left lying around"
@@ -51,120 +82,80 @@ class CamArchiver(threading.Thread):
                 self.subprocess.kill()
                 self.subprocess.wait()
                 self.subprocess = None
-        if os.path.isdir(self.tempDir):
-            for fn in os.listdir(self.tempDir):
-                os.remove(os.path.join(self.tempDir, fn))
-            os.rmdir(self.tempDir)
 
-
-    def downloadFiles(self):
-        "SCPs the files over from the remote server"
-        if not os.path.isdir(self.dir):
-            os.mkdir(self.dir)
-        if not os.path.isdir(self.tempDir):
-            os.mkdir(self.tempDir)
-        if V > 0: sys.stdout.write("Rsyncing files from target {}\n".format(self.scpTarget))
-        rsyncCmd = ["rsync", "-a", self.scpTarget, self.tempDir]
-        if V > 2: rsyncCmd.insert(2, "-v")
-        self.subprocess = subprocess.Popen(rsyncCmd, stdout=sys.stdout, stdin=sys.stdin)
-        ret = self.subprocess.wait()
-        if ret != 0:
-            sys.stderr.write("Rsyncing from {} to {} failed, exit code {}\n".format(self.scpTarget, self.dir, ret))
-            return False
-        else:
-            return True
-
-    def listFilesAndTimes(self):
-        "Returns a list of all the files along with a list of date time stamps to apply to them, sorted by date time stamp"
+    def list_files(self):
+        """Returns a list of all the files along with a list of date time
+        stamps to apply to them, sorted by date time stamp"""
         stills = []
-        for fn in os.listdir(self.tempDir):
-            m = self.DATE_TIME_RE.match(fn)
-            if m is None:
-                sys.stderr.write("Unexpected file in download: \"{}\"\r\n".format(fn))
+        for file_name in os.listdir(self.dir):
+            match = DATE_TIME_RE.match(file_name)
+            if match is None:
+                sys.stderr.write("Unexpected file in target: \"{}\"{linesep}".format(
+                    file_name, linesep=os.linesep))
             else:
-                stills.append((fn, tuple((int(i) for i in m.groups())))) # Should do sort during insert but don't care
-        self.remoteRmFiles = [fn for fn, dt in stills]
-        stills.sort(key=lambda x: x[1]) # Sort by date time stamp, default sorting of number tuples works nicely here.
+                file_path_name = os.path.abspath(os.path.join(self.dir, file_name)),
+                stills.append((file_path_name, tuple((int(i) for i in match.groups()))))
+                self.rm_files.append(file_path_name)
+        # Sort by date time stamp, default sorting of number tuples works nicely here.
+        stills.sort(key=lambda x: x[1])
         return stills
 
-    def annotateImage(self, img, time):
-        "Adds date / time text to an image"
-        draw = ImageDraw.Draw(img)
-        draw.text((0,0), "{0:04d}-{1:02d}-{2:02d} {3:02d}:{4:02d}:{5:02d}".format(*time), (255, 128, 0), font=self.FONT)
-        return draw
-
-    def processImages(self):
+    def process_images(self):
         "Go through the files we've got, annotate them and get them ready to encode"
-        frame = 0
-        if V > 0: sys.stdout.write("Processing images:\n")
-        fnDateTuples = self.listFilesAndTimes()
-        if len(fnDateTuples) == 0:
-            sys.stderr.write("No stills downloaded\n")
+        if V > 0:
+            sys.stdout.write("Processing images:\n")
+        queue = self.list_files()
+        if not queue:
+            sys.stderr.write("Nothing to do!{linesep}".format(linesep=os.linesep))
             return False
-        for fn, dateTime in fnDateTuples:
-            outFn = os.path.join(self.tempDir, self.IMG_FMT % frame)
-            if not os.path.isfile(outFn): # Skip files that have already been generated
-                if V > 1: sys.stdout.write("\t{} --> {}\n".format(fn, outFn))
-                try:
-                    img = Image.open(os.path.join(self.tempDir, fn))
-                    self.annotateImage(img, dateTime)
-                    img.save(outFn)
-                except:
-                    sys.stderr.write("Exception trying to annotate image {}, skipping\n".format(fn))
-                    continue
-            frame += 1
+        self.rm_files.extend(self.pool.map(annotate_image, enumerate(queue)))
         return True
 
-    def encode(self, framerate=(25,2), crf=30):
+    def encode(self, framerate=(25, 2), crf=30):
         "Encodes the images to the output"
-        outputFn = os.path.join(self.dir, "{0:04d}-{1:02d}-{2:02d}.mp4".format(*time.localtime()))
-        if V > 0: sys.stdout.write("Encoding images to video {}\n".format(outputFn))
-        self.subprocess = subprocess.Popen(["ffmpeg", "-framerate", "{0:d}/{1:d}".format(*framerate), "-i", os.path.join(self.tempDir, self.IMG_FMT), "-c:v", "libx264", "-crf", str(crf), "-pix_fmt", "yuv420p", outputFn])
+        output = os.path.abspath(os.path.join(
+            self.dir, "{0:04d}-{1:02d}-{2:02d}.mp4".format(*time.localtime())))
+        if V > 0:
+            sys.stdout.write("Encoding images to video {}\n".format(output))
+        self.subprocess = subprocess.Popen(["ffmpeg",
+                                            "-framerate",
+                                            "{0:d}/{1:d}".format(*framerate),
+                                            "-i", os.path.join(self.dir, IMG_FMT),
+                                            "-c:v",
+                                            "libx264",
+                                            "-crf",
+                                            str(crf),
+                                            "-pix_fmt",
+                                            "yuv420p",
+                                            output])
         ret = self.subprocess.wait()
         if ret != 0:
-            sys.stderr.write("Encoding images to {} failed, exit code {}\r\n".format(outputFn, ret))
+            sys.stderr.write("Encoding images to {} failed, exit code {}\r\n".format(output, ret))
             return False
-        else:
-            return True
+        return True
 
-    def removeRemoteFiles(self):
-        "Removes the remote files"
-        if V > 0: sys.stdout.write("Removing remote files\n")
-        remoteHost, remoteDir = self.scpTarget.split(':')
-        rmScriptFn = "rm-encoded.bash"
-        rmScriptPn = os.path.join(self.tempDir, rmScriptFn)
-        rmScript = open(rmScriptPn, "w")
-        for fn in self.remoteRmFiles:
-            rmScript.write("rm '{}'\n".format(fn))
-        rmScript.write("rm '{}'\n".format(rmScriptFn))
-        rmScript.close()
-        self.subprocess = subprocess.Popen(['scp', rmScriptPn, self.scpTarget])
-        ret = self.subprocess.wait()
-        if ret != 0:
-            sys.stderr.write("Couldn't send remove encoded images script to remote host, exit code {}\r\n".format(ret))
-            return False
-        else:
-            self.subprocess = subprocess.Popen(['ssh', remoteHost], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
-            self.subprocess.stdin.write("cd {}\n".format(remoteDir))
-            self.subprocess.stdin.write("bash {}\n".format(rmScriptFn))
-            self.subprocess.stdin.close()
-            ret = self.subprocess.wait()
-            if ret != 0:
-                sys.stderr.write("Remove remote files commanded failed, exit code {}\r\n".format(ret))
-                return False
-            else:
-                return True
+    def remove_files(self):
+        "Remove all processed and temprary files"
+        for file_path_name in self.rm_files:
+            os.remove(file_path_name)
 
     def run(self):
         "Run the encode task"
-        if not self.downloadFiles(): return
-        if not self.processImages(): return
-        if not self.encode(): return
-        if not self.removeRemoteFiles(): return
+        if not self.process_images():
+            return
+        if not self.encode():
+            return
+        if not self.remove_files():
+            return
+
+def main(directories):
+    "Main function for script to encode images from multiple directories"
+    process_pool = Pool(cpu_count())
+    for archive in (CamArchiver(t, process_pool) for t in directories):
+        archive.run()
 
 if __name__ == '__main__':
     if len(sys.argv) < 2:
         sys.exit(USAGE)
     else:
-        threads = [CamArchiver(t) for t in sys.argv[1:]]
-        for t in threads: t.start()
+        main(sys.argv[1:])
