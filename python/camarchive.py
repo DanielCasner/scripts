@@ -27,7 +27,7 @@ as an encode.
 SCP TARGETS may be one or multiple scp targets, each one will be spawned in a thread
 """ % sys.argv[0]
 
-V = 2
+V = 3
 
 DATE_TIME_RE = re.compile(
     r".*/[0-9A-F]+\(.+\)_.+_(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2}).+\.jpg"
@@ -56,6 +56,8 @@ def generate_out_name(in_file_name, enumeration):
 def annotate_image(args):
     "Adds date / time text to an image"
     enumeration, (in_file_name, annotate_time) = args
+    if V >= 3: # Can't use vprint here because we don't want the automatic new line
+        sys.stdout.write("{0:d}\r".format(enumeration))
     out_file_name = generate_out_name(in_file_name, enumeration)
     if os.path.isfile(out_file_name):
         # Skip files which have already been generated
@@ -152,6 +154,7 @@ class CamArchiver(object):
 
     def remove_files(self):
         "Remove all processed and temprary files"
+        vprint(1, "Removing {} files".format(len(self.rm_files)))
         for file_path_name in self.rm_files:
             os.remove(file_path_name)
 
