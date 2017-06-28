@@ -44,7 +44,7 @@ def generate_out_name(in_file_name, enumeration):
     path, _ = os.path.split(in_file_name)
     return os.path.join(path, IMG_FMT % enumeration)
 
-def annotate_image(self, args):
+def annotate_image(args):
     "Adds date / time text to an image"
     enumeration, (in_file_name, annotate_time) = args
     out_file_name = generate_out_name(in_file_name, enumeration)
@@ -55,7 +55,7 @@ def annotate_image(self, args):
         img = Image.open(in_file_name)
         draw = ImageDraw.Draw(img)
         draw.text((0, 0), "{0:04d}-{1:02d}-{2:02d} {3:02d}:{4:02d}:{5:02d}".format(*annotate_time),
-                  (255, 128, 0), font=self.FONT)
+                  (255, 128, 0), font=FONT)
         img.save(out_file_name)
     except Exception as exp:
         sys.stderr.write("Failed to annotate image \"{}\":{linesep}{}{linesep}".format(
@@ -64,6 +64,16 @@ def annotate_image(self, args):
         return None
     else:
         return out_file_name
+
+def match_image(file_path_name):
+    """Checks if image matches the expeted file name RE and parses out date time stamp
+    tuple if it does"""
+    match = DATE_TIME_RE.match(file_path_name)
+    if match is None:
+        sys.stderr.write("Unexpected file in target: \"{}\"{linesep}".format(
+            file_path_name, linesep=os.linesep))
+        return None
+    return file_path_name, tuple((int(i) for i in match.groups()))
 
 class CamArchiver(object):
     "A class to manage the lifecycle of camera image archiving."
@@ -86,18 +96,15 @@ class CamArchiver(object):
     def list_files(self):
         """Returns a list of all the files along with a list of date time
         stamps to apply to them, sorted by date time stamp"""
-        stills = []
-        for file_name in os.listdir(self.dir):
-            match = DATE_TIME_RE.match(file_name)
-            if match is None:
-                sys.stderr.write("Unexpected file in target: \"{}\"{linesep}".format(
-                    file_name, linesep=os.linesep))
-            else:
-                file_path_name = os.path.abspath(os.path.join(self.dir, file_name)),
-                stills.append((file_path_name, tuple((int(i) for i in match.groups()))))
-                self.rm_files.append(file_path_name)
+        candidates = (os.path.abspath(os.path.join(self.dir, file_name))
+                      for file_name in os.listdir(self.dir))
+        stills = [i for i in self.pool.map(match_image, candidates) if i is not None]
+        if V > 0:
+            sys.stdout.write("Have {} stills to process{linesep}".format(
+                len(stills), linesep=os.linesep))
         # Sort by date time stamp, default sorting of number tuples works nicely here.
         stills.sort(key=lambda x: x[1])
+        self.rm_files.extend((fpn for fpn, _ in stills))
         return stills
 
     def process_images(self):
@@ -108,7 +115,8 @@ class CamArchiver(object):
         if not queue:
             sys.stderr.write("Nothing to do!{linesep}".format(linesep=os.linesep))
             return False
-        self.rm_files.extend(self.pool.map(annotate_image, enumerate(queue)))
+        annotated_fpns = self.pool.map(annotate_image, enumerate(queue))
+        self.rm_files.extend((fpn for fpn in annotated_fpns if fpn is not None))
         return True
 
     def encode(self, framerate=(25, 2), crf=30):
