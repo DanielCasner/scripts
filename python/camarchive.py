@@ -108,6 +108,7 @@ class CamArchiver(object):
         vprint(2, "\tListing directory {}".format(self.dir))
         candidates = (os.path.abspath(os.path.join(self.dir, file_name))
                       for file_name in os.listdir(self.dir))
+        vprint(2, "\tMatching stills for encoding")
         stills = [i for i in self.pool.map(match_image, candidates) if i is not None]
         vprint(1, "Have {} stills to process".format(len(stills)))
         # Sort by date time stamp, default sorting of number tuples works nicely here.
