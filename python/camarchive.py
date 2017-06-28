@@ -27,9 +27,11 @@ as an encode.
 SCP TARGETS may be one or multiple scp targets, each one will be spawned in a thread
 """ % sys.argv[0]
 
-V = 1
+V = 2
 
-DATE_TIME_RE = re.compile(r"[0-9A-F]+\(.+\)_.+_(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2}).+\.jpg")
+DATE_TIME_RE = re.compile(
+    r".*/[0-9A-F]+\(.+\)_.+_(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2}).+\.jpg"
+)
 IMG_FMT = "img%08d.bmp" # Worst case at 1 frame per 2 seconds for 24 hours
 
 if os.path.isfile("/usr/share/fonts/truetype/droid/DroidSans.ttf"):
@@ -38,6 +40,13 @@ elif os.path.isfile("/Library/Fonts/Andale Mono.ttf"):
     FONT = ImageFont.truetype("/Library/Fonts/Andale Mono.ttf", 22)
 else:
     raise sys.exit("No supported font found")
+
+def vprint(level, log):
+    "Prints log only if global V >= level"
+    if V >= level:
+        sys.stdout.write(log)
+        sys.stdout.write(os.linesep)
+        sys.stdout.flush()
 
 def generate_out_name(in_file_name, enumeration):
     "Generates an enumerated file name from the incoming file name and enumeration value"
@@ -96,12 +105,11 @@ class CamArchiver(object):
     def list_files(self):
         """Returns a list of all the files along with a list of date time
         stamps to apply to them, sorted by date time stamp"""
+        vprint(2, "\tListing directory {}".format(self.dir))
         candidates = (os.path.abspath(os.path.join(self.dir, file_name))
                       for file_name in os.listdir(self.dir))
         stills = [i for i in self.pool.map(match_image, candidates) if i is not None]
-        if V > 0:
-            sys.stdout.write("Have {} stills to process{linesep}".format(
-                len(stills), linesep=os.linesep))
+        vprint(1, "Have {} stills to process".format(len(stills)))
         # Sort by date time stamp, default sorting of number tuples works nicely here.
         stills.sort(key=lambda x: x[1])
         self.rm_files.extend((fpn for fpn, _ in stills))
@@ -109,12 +117,12 @@ class CamArchiver(object):
 
     def process_images(self):
         "Go through the files we've got, annotate them and get them ready to encode"
-        if V > 0:
-            sys.stdout.write("Processing images:\n")
+        vprint(1, "Processing images")
         queue = self.list_files()
         if not queue:
             sys.stderr.write("Nothing to do!{linesep}".format(linesep=os.linesep))
             return False
+        vprint(2, "\tAnnotating images")
         annotated_fpns = self.pool.map(annotate_image, enumerate(queue))
         self.rm_files.extend((fpn for fpn in annotated_fpns if fpn is not None))
         return True
@@ -123,8 +131,7 @@ class CamArchiver(object):
         "Encodes the images to the output"
         output = os.path.abspath(os.path.join(
             self.dir, "{0:04d}-{1:02d}-{2:02d}.mp4".format(*time.localtime())))
-        if V > 0:
-            sys.stdout.write("Encoding images to video {}\n".format(output))
+        vprint(1, "Encoding images to video {}".format(output))
         self.subprocess = subprocess.Popen(["ffmpeg",
                                             "-framerate",
                                             "{0:d}/{1:d}".format(*framerate),
