@@ -9,6 +9,7 @@ __version__ = "0.2.0"
 
 import sys
 import os
+import argparse
 import subprocess
 import re
 import time
@@ -89,10 +90,11 @@ def match_image(file_path_name):
 class CamArchiver(object):
     "A class to manage the lifecycle of camera image archiving."
 
-    def __init__(self, target, pool):
+    def __init__(self, target, pool, parallel):
         "Sets up the archiving class and process"
         self.dir = target
         self.pool = pool
+        self.threads = parallel
         self.subprocess = None
         self.rm_files = []
 
@@ -130,10 +132,11 @@ class CamArchiver(object):
         self.rm_files.extend((fpn for fpn in annotated_fpns if fpn is not None))
         return True
 
-    def encode(self, framerate=(25, 2), crf=30):
+    def encode(self, output_directory, framerate=(25, 2), crf=30):
         "Encodes the images to the output"
         output = os.path.abspath(os.path.join(
-            self.dir, "{0:04d}-{1:02d}-{2:02d}.mp4".format(*time.localtime())))
+            output_directory,
+            "{name}{0:04d}-{1:02d}-{2:02d}.mp4".format(*time.localtime(), name=self.dir)))
         vprint(1, "Encoding images to video {}".format(output))
         self.subprocess = subprocess.Popen(["ffmpeg",
                                             "-framerate",
@@ -145,6 +148,8 @@ class CamArchiver(object):
                                             str(crf),
                                             "-pix_fmt",
                                             "yuv420p",
+                                            '-threads',
+                                            str(self.threads),
                                             output])
         ret = self.subprocess.wait()
         if ret != 0:
@@ -158,23 +163,45 @@ class CamArchiver(object):
         for file_path_name in self.rm_files:
             os.remove(file_path_name)
 
-    def run(self):
+    def run(self, encode_args):
         "Run the encode task"
         if not self.process_images():
             return
-        if not self.encode():
+        if not self.encode(*encode_args):
             return
         if not self.remove_files():
             return
 
-def main(directories):
+def main():
     "Main function for script to encode images from multiple directories"
-    process_pool = Pool(cpu_count())
-    for archive in (CamArchiver(t, process_pool) for t in directories):
-        archive.run()
+    parser = argparse.ArgumentParser("Security camera archiver")
+    parser.add_argument('-v', '--verbose', action="count",
+                        help="Increase debugging verbosity")
+    parser.add_argument('-o', '--output_directory', default=os.path.curdir,
+                        help="Where to put encoded video files")
+    parser.add_argument('-p', '--parallel', type=int, default=cpu_count(),
+                        help="How many processes to fork, default is cpu count")
+    parser.add_argument('--framerate', type=int, nargs=2, default=[25, 2],
+                        help="Framerate for encoded video, numerator, denominator")
+    parser.add_argument('--crf', type=int, nargs=1, default=35,
+                        help="Quality for encoded video")
+    parser.add_argument('inputs', nargs='+',
+                        help="Directories of stills to encode")
+    args = parser.parse_args()
+
+    global V
+    V = args.verbose
+
+    if not os.path.isdir(args.output_directory):
+        sys.exit('No such output directory "{}"'.format(args.output_directory))
+    for i in args.inputs:
+        if not os.path.isdir(i):
+            sys.exit('No such input directory "{}"'.format(i))
+
+    process_pool = Pool(args.parallel)
+
+    for archive in (CamArchiver(t, process_pool, args.parallel) for t in args.inputs):
+        archive.run((args.output_directory, args.framerate, args.crf))
 
 if __name__ == '__main__':
-    if len(sys.argv) < 2:
-        sys.exit(USAGE)
-    else:
-        main(sys.argv[1:])
+    main()
