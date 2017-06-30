@@ -138,6 +138,7 @@ class CamArchiver(object):
             output_directory,
             "{name}{0:04d}-{1:02d}-{2:02d}.mp4".format(*time.localtime(), name=self.dir)))
         vprint(1, "Encoding images to video {}".format(output))
+        ffmpeg_loglevel = -8 + 8*V # See man ffmpeg
         self.subprocess = subprocess.Popen(["ffmpeg",
                                             "-framerate",
                                             "{0:d}/{1:d}".format(*framerate),
@@ -150,6 +151,8 @@ class CamArchiver(object):
                                             "yuv420p",
                                             '-threads',
                                             str(self.threads),
+                                            '-loglevel',
+                                            str(ffmpeg_loglevel),
                                             output])
         ret = self.subprocess.wait()
         if ret != 0:
