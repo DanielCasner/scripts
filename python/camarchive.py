@@ -136,7 +136,7 @@ class CamArchiver(object):
         "Encodes the images to the output"
         output = os.path.abspath(os.path.join(
             output_directory,
-            "{name}{0:04d}-{1:02d}-{2:02d}.mp4".format(*time.localtime(), name=self.dir)))
+            "{name}_{0:04d}-{1:02d}-{2:02d}.mp4".format(*time.localtime(), name=self.dir)))
         vprint(1, "Encoding images to video {}".format(output))
         ffmpeg_loglevel = -8 + 8*V # See man ffmpeg
         self.subprocess = subprocess.Popen(["ffmpeg",
