@@ -33,7 +33,7 @@ V = 3
 DATE_TIME_RE = re.compile(
     r".*/[0-9A-F]+\(.+\)_.+_(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2}).+\.jpg"
 )
-IMG_FMT = "img%08d.bmp" # Worst case at 1 frame per 2 seconds for 24 hours
+IMG_FMT = "img%08d.bmp"  # Worst case at 1 frame per 2 seconds for 24 hours
 
 if os.path.isfile("/usr/share/fonts/truetype/droid/DroidSans.ttf"):
     FONT = ImageFont.truetype("/usr/share/fonts/truetype/droid/DroidSans.ttf", 22)
@@ -42,6 +42,7 @@ elif os.path.isfile("/Library/Fonts/Andale Mono.ttf"):
 else:
     raise sys.exit("No supported font found")
 
+
 def vprint(level, log):
     "Prints log only if global V >= level"
     if V >= level:
@@ -49,15 +50,17 @@ def vprint(level, log):
         sys.stdout.write(os.linesep)
         sys.stdout.flush()
 
+
 def generate_out_name(in_file_name, enumeration):
     "Generates an enumerated file name from the incoming file name and enumeration value"
     path, _ = os.path.split(in_file_name)
     return os.path.join(path, IMG_FMT % enumeration)
 
+
 def annotate_image(args):
     "Adds date / time text to an image"
     enumeration, (in_file_name, annotate_time) = args
-    if V >= 3: # Can't use vprint here because we don't want the automatic new line
+    if V >= 3:  # Can't use vprint here because we don't want the automatic new line
         sys.stdout.write("{0:d}\r".format(enumeration))
     out_file_name = generate_out_name(in_file_name, enumeration)
     if os.path.isfile(out_file_name):
@@ -77,6 +80,7 @@ def annotate_image(args):
     else:
         return out_file_name
 
+
 def match_image(file_path_name):
     """Checks if image matches the expeted file name RE and parses out date time stamp
     tuple if it does"""
@@ -86,6 +90,7 @@ def match_image(file_path_name):
             file_path_name, linesep=os.linesep))
         return None
     return file_path_name, tuple((int(i) for i in match.groups()))
+
 
 class CamArchiver(object):
     "A class to manage the lifecycle of camera image archiving."
@@ -138,7 +143,7 @@ class CamArchiver(object):
             output_directory,
             "{name}_{0:04d}-{1:02d}-{2:02d}.mp4".format(*time.localtime(), name=self.dir)))
         vprint(1, "Encoding images to video {}".format(output))
-        ffmpeg_loglevel = -8 + 8*V # See man ffmpeg
+        ffmpeg_loglevel = -8 + 8*V  # See man ffmpeg
         self.subprocess = subprocess.Popen(["ffmpeg",
                                             "-framerate",
                                             "{0:d}/{1:d}".format(*framerate),
@@ -175,6 +180,7 @@ class CamArchiver(object):
         if not self.remove_files():
             return
 
+
 def main():
     "Main function for script to encode images from multiple directories"
     parser = argparse.ArgumentParser("Security camera archiver")
@@ -182,6 +188,9 @@ def main():
                         help="Increase debugging verbosity")
     parser.add_argument('-o', '--output_directory', default=os.path.curdir,
                         help="Where to put encoded video files")
+    parser.add_argument('-c', '--change_directory',
+                        help="Change working directory before running."
+                        "Inputs and outputs if relative will be this path")
     parser.add_argument('-p', '--parallel', type=int, default=cpu_count(),
                         help="How many processes to fork, default is cpu count")
     parser.add_argument('--framerate', type=int, nargs=2, default=[25, 2],
@@ -203,8 +212,17 @@ def main():
 
     process_pool = Pool(args.parallel)
 
+    if args.change_directory:
+        try:
+            os.chdir(args.change_directory)
+        except FileNotFoundError as e:
+            sys.exit("Could not change working directory to {0:s}: {1!s}".format(args.change_directory, e))
+
+    vprint(0, "Camarchive starting at: {}".format(time.ctime()))
+
     for archive in (CamArchiver(t, process_pool, args.parallel) for t in args.inputs):
         archive.run((args.output_directory, args.framerate, args.crf))
+
 
 if __name__ == '__main__':
     main()
