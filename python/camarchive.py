@@ -204,6 +204,12 @@ def main():
     global V
     V = args.verbose
 
+    if args.change_directory:
+        try:
+            os.chdir(args.change_directory)
+        except FileNotFoundError as e:
+            sys.exit("Could not change working directory to {0:s}: {1!s}".format(args.change_directory, e))
+
     if not os.path.isdir(args.output_directory):
         sys.exit('No such output directory "{}"'.format(args.output_directory))
     for i in args.inputs:
@@ -212,12 +218,8 @@ def main():
 
     process_pool = Pool(args.parallel)
 
-    if args.change_directory:
-        try:
-            os.chdir(args.change_directory)
-        except FileNotFoundError as e:
-            sys.exit("Could not change working directory to {0:s}: {1!s}".format(args.change_directory, e))
-
+    vprint(0, os.linesep)
+    vprint(0, '#'*80)
     vprint(0, "Camarchive starting at: {}".format(time.ctime()))
 
     for archive in (CamArchiver(t, process_pool, args.parallel) for t in args.inputs):
