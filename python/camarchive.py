@@ -184,7 +184,7 @@ class CamArchiver(object):
 def main():
     "Main function for script to encode images from multiple directories"
     parser = argparse.ArgumentParser("Security camera archiver")
-    parser.add_argument('-v', '--verbose', action="count",
+    parser.add_argument('-v', '--verbose', action="count", default=0,
                         help="Increase debugging verbosity")
     parser.add_argument('-o', '--output_directory', default=os.path.curdir,
                         help="Where to put encoded video files")
